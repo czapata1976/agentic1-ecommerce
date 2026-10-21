@@ -1,0 +1,10 @@
+# Dependencias del proyecto (versiones verificadas en Python 3.12)
+langgraph==1.2.16
+langchain==1.4.6
+langchain-google-genai==4.4.2
+fastapi==0.156.3
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+pydantic==2.14.1
+python-dotenv==1.2.4
+pytest==9.1.1

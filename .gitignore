@@ -1,0 +1,22 @@
+# Secretos y entorno
+.env
+.env.*
+!.env.example
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# LangGraph y datos locales
+.langgraph_api/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Heroku / SO
+.heroku/
+.DS_Store
