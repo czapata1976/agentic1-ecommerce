@@ -9,6 +9,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # LangGraph y datos locales
 .langgraph_api/
@@ -17,6 +21,8 @@ __pycache__/
 *.sqlite3
 *.log
 
-# Heroku / SO
+# Heroku / SO / editores
 .heroku/
 .DS_Store
+.vscode/
+.idea/

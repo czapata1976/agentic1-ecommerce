@@ -31,8 +31,8 @@ está preparada para desplegarse en Heroku y deja listo el webhook de Telegram.
 │   ├── agentes.py          # carga dinámica de agentes
 │   ├── asistente/          # agente de ejemplo
 │   └── router/             # router del ecommerce (graph, prompts, tools)
-├── scripts/                # utilidades (verificar_entorno, probar_router)
-├── tests/                  # pytest
+├── scripts/                # utilidades (verificar_entorno, test_router)
+├── tests/                  # pytest + casos_router.json
 ├── bruno/                  # colección de peticiones HTTP
 ├── Procfile                # arranque en Heroku
 └── requirements.txt
@@ -99,8 +99,8 @@ python main.py router "mi pedido 4521 llegó roto" --saltos --thread cliente-1
 # Imprimir el diagrama Mermaid sin ejecutar el grafo
 python main.py router --diagrama
 
-# Probar los seis casos de enrutamiento
-python scripts/probar_router.py
+# Los quince casos de tests/casos_router.json en una tabla con ✔/✘
+python scripts/test_router.py
 ```
 
 Salida de ejemplo:
@@ -126,15 +126,29 @@ uvicorn api.app:app --reload --port 8000
 Swagger con ejemplos listos para "Try it out":
 <http://localhost:8000/docs>
 
-Probar desde la terminal:
+Probar desde la terminal (Windows PowerShell):
 
 ```powershell
 curl.exe http://localhost:8000/health
 
-curl.exe -X POST http://localhost:8000/chat `
-  -H "Content-Type: application/json" `
-  -d "{\"user_id\":\"cliente-123\",\"texto\":\"mi pedido 4521 llegó roto\"}"
+# Ojo: PowerShell 5.1 borra las comillas internas que se escapan con \" al
+# llamar a curl.exe, así que el body se arma con ConvertTo-Json y va en UTF-8.
+$body = @{ user_id = "cliente-123"; texto = "mi pedido 4521 llegó roto" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://localhost:8000/chat -Method Post `
+  -ContentType "application/json; charset=utf-8" `
+  -Body ([Text.Encoding]::UTF8.GetBytes($body))
 ```
+
+En bash, Git Bash o Linux / macOS:
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"cliente-123","texto":"mi pedido 4521 llegó roto"}'
+```
+
+Si los acentos se ven raros en una consola antigua de Windows, es el visor y no
+la API (responde UTF-8 válido): revisa la misma llamada en `/docs` o usa `pwsh`.
 
 Respuesta:
 
@@ -153,11 +167,18 @@ eligiendo el entorno `Local` o `Heroku`.
 ## Correr las pruebas
 
 ```powershell
-python -m pytest -q
+# Suite rápida: no llama al modelo ni consume cuota
+python -m pytest -q -m "not integracion"
+
+# Router contra el modelo real: 15 casos, exige 13 aciertos
+python -m pytest -q -m integracion
 ```
 
-Las pruebas **no llaman al modelo** ni consumen cuota: usan un LLM falso,
-verifican la estructura del grafo, el contrato de la API, el OpenAPI y la CLI.
+La suite por defecto usa un LLM falso: verifica la estructura del grafo, el
+contrato de la API, el OpenAPI y la CLI. Los casos marcados como `integracion`
+(`tests/test_router.py`, leídos de `tests/casos_router.json`) sí llaman a Gemini,
+necesitan `GOOGLE_API_KEY` y exigen **al menos 13 de 15** aciertos porque el
+modelo no es determinista.
 
 ## Despliegue en Heroku
 
