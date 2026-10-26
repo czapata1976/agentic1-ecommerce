@@ -103,11 +103,131 @@ def test_chat_ruta_inesperada_502(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cliente.post("/chat", json={"user_id": "1", "texto": "hola"}).status_code == 502
 
 
-def test_telegram_no_expuesto_y_responde_ok() -> None:
-    respuesta = cliente.post("/telegram", json={"update_id": 1, "message": {"text": "hola"}})
+def test_telegram_no_aparece_en_el_swagger() -> None:
+    assert "/telegram" not in cliente.get("/openapi.json").json()["paths"]
+
+
+CABECERA_TELEGRAM = {"X-Telegram-Bot-Api-Secret-Token": ajustes.telegram_secret}
+
+
+class _RespuestaHTTPFalsa:
+    """Imita la respuesta de httpx.post."""
+
+    status_code = 200
+    text = '{"ok":true,"result":{"message_id":1}}'
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+@pytest.fixture
+def envio_telegram(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Captura las llamadas a httpx.post para no salir a la red."""
+    llamadas: list[dict[str, Any]] = []
+
+    def post_falso(  # noqa: ANN001
+        url: str, json: dict[str, Any] | None = None, timeout: float | None = None
+    ) -> _RespuestaHTTPFalsa:
+        llamadas.append({"url": url, "json": json, "timeout": timeout})
+        return _RespuestaHTTPFalsa()
+
+    monkeypatch.setattr(api_mod.httpx, "post", post_falso)
+    return llamadas
+
+
+def test_telegram_sin_secreto_403() -> None:
+    respuesta = cliente.post("/telegram", json={"update_id": 1})
+    assert respuesta.status_code == 403
+
+
+def test_telegram_secreto_incorrecto_403() -> None:
+    respuesta = cliente.post(
+        "/telegram",
+        json={"update_id": 1},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "otro-secreto"},
+    )
+    assert respuesta.status_code == 403
+
+
+def test_telegram_enruta_y_responde_al_chat(
+    monkeypatch: pytest.MonkeyPatch, envio_telegram: list[dict[str, Any]]
+) -> None:
+    falso = _GrafoFalso()
+    monkeypatch.setattr(api_mod, "grafo_router", falso)
+
+    respuesta = cliente.post(
+        "/telegram",
+        headers=CABECERA_TELEGRAM,
+        json={
+            "update_id": 1,
+            "message": {
+                "message_id": 7,
+                "text": "mi pedido llegó roto",
+                "chat": {"id": 4242},
+            },
+        },
+    )
+
     assert respuesta.status_code == 200
     assert respuesta.json() == {"ok": True}
-    assert "/telegram" not in cliente.get("/openapi.json").json()["paths"]
+    assert falso.entrada == {"mensaje": "mi pedido llegó roto"}
+    assert falso.config == {"configurable": {"thread_id": "4242"}}
+    assert len(envio_telegram) == 1
+    assert envio_telegram[0]["url"].endswith("/sendMessage")
+    assert envio_telegram[0]["json"] == {"chat_id": 4242, "text": "respuesta de prueba"}
+
+
+def test_telegram_ignora_updates_sin_texto(
+    monkeypatch: pytest.MonkeyPatch, envio_telegram: list[dict[str, Any]]
+) -> None:
+    falso = _GrafoFalso()
+    monkeypatch.setattr(api_mod, "grafo_router", falso)
+
+    respuesta = cliente.post(
+        "/telegram",
+        headers=CABECERA_TELEGRAM,
+        json={"update_id": 2, "message": {"photo": [{"file_id": "x"}], "chat": {"id": 1}}},
+    )
+
+    assert respuesta.status_code == 200
+    assert falso.entrada == {}
+    assert envio_telegram == []
+
+
+def test_telegram_sin_token_no_intenta_enviar(
+    monkeypatch: pytest.MonkeyPatch, envio_telegram: list[dict[str, Any]]
+) -> None:
+    monkeypatch.setattr(api_mod, "grafo_router", _GrafoFalso())
+    monkeypatch.setattr(api_mod.ajustes, "telegram_token", "")
+
+    respuesta = cliente.post(
+        "/telegram",
+        headers=CABECERA_TELEGRAM,
+        json={"update_id": 4, "message": {"text": "hola", "chat": {"id": 8}}},
+    )
+
+    assert respuesta.status_code == 200
+    assert envio_telegram == []
+
+
+def test_telegram_devuelve_200_si_falla_el_modelo(
+    monkeypatch: pytest.MonkeyPatch, envio_telegram: list[dict[str, Any]]
+) -> None:
+    falso = _GrafoFalso(error=RuntimeError("detalle interno con api_key=secreta"))
+    monkeypatch.setattr(api_mod, "grafo_router", falso)
+
+    respuesta = cliente.post(
+        "/telegram",
+        headers=CABECERA_TELEGRAM,
+        json={"update_id": 3, "message": {"text": "hola", "chat": {"id": 9}}},
+    )
+
+    assert respuesta.status_code == 200
+    assert respuesta.json() == {"ok": True}
+    assert len(envio_telegram) == 1
+    texto = envio_telegram[0]["json"]["text"]
+    assert "modelo" in texto.lower()
+    assert "secreta" not in texto
 
 
 def test_openapi_completo() -> None:

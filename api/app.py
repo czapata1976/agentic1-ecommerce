@@ -8,9 +8,11 @@ Documentación interactiva: http://localhost:8000/docs
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import Any, Literal
 
-from fastapi import Body, FastAPI, HTTPException
+import httpx
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import ajustes
@@ -18,7 +20,17 @@ from src.config import ajustes
 # El grafo se importa (y por tanto se compila) UNA sola vez al arrancar la app.
 from src.router.graph import grafo as grafo_router
 
+# uvicorn configura sus loggers, no el raíz: `api.router` recibe un handler propio
+# para que sus INFO salgan en `heroku logs --tail`.
+# OJO: no se activa INFO en el raíz a propósito. El logger de httpx registra la
+# URL de cada petición, y la de sendMessage lleva el token del bot.
 registro = logging.getLogger("api.router")
+registro.setLevel(logging.INFO)
+if not registro.handlers:
+    _manejador = logging.StreamHandler()
+    _manejador.setFormatter(logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
+    registro.addHandler(_manejador)
+registro.propagate = False
 
 DESCRIPCION = """
 API HTTP del **router** de un ecommerce, construido con LangGraph.
@@ -41,7 +53,7 @@ app = FastAPI(
     openapi_tags=[
         {"name": "salud", "description": "Estado del servicio y modelo configurado."},
         {"name": "chat", "description": "Enrutamiento de mensajes de clientes."},
-        {"name": "telegram", "description": "Webhook de Telegram (pendiente, parte 5)."},
+        {"name": "telegram", "description": "Webhook de Telegram (oculto del Swagger a propósito)."},
     ],
 )
 
@@ -145,6 +157,64 @@ def _invocar_router(user_id: str, texto: str) -> ChatResponse:
     )
 
 
+def _responder_en_telegram(texto: str, chat_id: str) -> str:
+    """Enruta el mensaje y devuelve la respuesta para el usuario.
+
+    Cualquier fallo del modelo se queda en el log y se traduce en un mensaje
+    genérico: el webhook nunca debe reventar por culpa del LLM.
+    """
+    try:
+        estado = grafo_router.invoke(
+            {"mensaje": texto},
+            config={"configurable": {"thread_id": chat_id}},
+        )
+    except Exception:
+        registro.exception("Fallo el grafo en el webhook (chat_id=%s)", chat_id)
+        return MENSAJE_ERROR_MODELO
+
+    ruta = str(estado.get("ruta", "")).strip()
+    motivo = str(estado.get("motivo", "")).strip()
+    # Esta línea es la que se revisa con `heroku logs --tail`.
+    registro.info("chat_id=%s ruta=%s motivo=%s", chat_id, ruta, motivo)
+    return str(estado.get("respuesta", "")).strip() or MENSAJE_ERROR_MODELO
+
+
+def _enviar_a_telegram(chat_id: int | str, texto: str) -> bool:
+    """Envía `texto` al chat con sendMessage (httpx, sin librerías de bot).
+
+    Nunca se registra la excepción completa: su mensaje incluye la URL con el token.
+    """
+    if not ajustes.telegram_configurado:
+        registro.warning("TELEGRAM_TOKEN vacío: no se envía la respuesta a Telegram.")
+        return False
+
+    endpoint = f"https://api.telegram.org/bot{ajustes.telegram_token}/sendMessage"
+    try:
+        respuesta = httpx.post(
+            endpoint,
+            json={"chat_id": chat_id, "text": texto},
+            timeout=20.0,
+        )
+        respuesta.raise_for_status()
+    except httpx.HTTPError as exc:
+        detalle = getattr(exc, "response", None)
+        registro.error(
+            "No se pudo enviar el mensaje a Telegram (chat_id=%s, %s, http=%s): %s",
+            chat_id,
+            type(exc).__name__,
+            getattr(detalle, "status_code", "sin respuesta"),
+            getattr(detalle, "text", "")[:200],
+        )
+        return False
+    return True
+
+
+def _atender_update(texto: str, chat_id: int | str) -> None:
+    """Enruta el mensaje y contesta al usuario. Corre en segundo plano."""
+    respuesta = _responder_en_telegram(texto, str(chat_id))
+    _enviar_a_telegram(chat_id, respuesta)
+
+
 @app.get(
     "/health",
     response_model=HealthResponse,
@@ -185,6 +255,37 @@ def chat(peticion: ChatRequest) -> ChatResponse:
 
 
 @app.post("/telegram", include_in_schema=False)
-def telegram(payload: Any = Body(default=None)) -> dict[str, bool]:
-    """Webhook de Telegram. Se implementa en la parte 5 del taller."""
+def telegram(
+    tareas: BackgroundTasks,
+    update: Any = Body(default=None),
+    x_telegram_bot_api_secret_token: str = Header(default=""),
+) -> dict[str, bool]:
+    """Webhook de Telegram: valida el secreto, encola la respuesta y devuelve 200.
+
+    Contesta al instante y deja el enrutamiento y el `sendMessage` en segundo
+    plano: si el modelo tarda, Telegram ya recibió su 200 y no reintenta el
+    update (el usuario no recibe la respuesta dos veces). El único caso que no
+    devuelve 200 es el 403 por secreto inválido.
+    """
+    if not secrets.compare_digest(
+        x_telegram_bot_api_secret_token, ajustes.telegram_secret
+    ):
+        registro.warning("Webhook rechazado: el secreto de la cabecera no coincide.")
+        raise HTTPException(status_code=403, detail="Secreto de Telegram inválido.")
+
+    if not isinstance(update, dict):
+        return {"ok": True}
+
+    mensaje = update.get("message")
+    if not isinstance(mensaje, dict):
+        return {"ok": True}  # edited_message, callback_query, etc.
+
+    chat = mensaje.get("chat")
+    chat_id = chat.get("id") if isinstance(chat, dict) else None
+    texto = str(mensaje.get("text") or "").strip()
+    if chat_id is None or not texto:
+        return {"ok": True}  # fotos, stickers o audios: no hay texto que enrutar
+
+    # Se responde 200 ya y el trabajo pesado sigue en segundo plano.
+    tareas.add_task(_atender_update, texto, chat_id)
     return {"ok": True}
