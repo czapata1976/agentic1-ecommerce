@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import ajustes
@@ -213,6 +214,12 @@ def _atender_update(texto: str, chat_id: int | str) -> None:
     """Enruta el mensaje y contesta al usuario. Corre en segundo plano."""
     respuesta = _responder_en_telegram(texto, str(chat_id))
     _enviar_a_telegram(chat_id, respuesta)
+
+
+@app.get("/", include_in_schema=False)
+def raiz() -> RedirectResponse:
+    """La raíz no tiene contenido propio: se redirige al Swagger."""
+    return RedirectResponse(url="/docs")
 
 
 @app.get(

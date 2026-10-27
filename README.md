@@ -119,6 +119,7 @@ uvicorn api.app:app --reload --port 8000
 
 | Ruta | Método | Descripción |
 | --- | --- | --- |
+| `/` | GET | Redirige a `/docs` (Swagger). |
 | `/health` | GET | `{"ok": true, "modelo": MODELO}` |
 | `/chat` | POST | Body `{"user_id", "texto"}`; usa `user_id` como `thread_id`. |
 | `/telegram` | POST | Webhook de Telegram (oculto del Swagger). |

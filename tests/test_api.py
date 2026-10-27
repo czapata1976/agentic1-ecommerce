@@ -41,6 +41,12 @@ def test_health() -> None:
     assert respuesta.json() == {"ok": True, "modelo": ajustes.modelo}
 
 
+def test_raiz_redirige_a_docs() -> None:
+    respuesta = cliente.get("/", follow_redirects=False)
+    assert respuesta.status_code in (307, 308)
+    assert respuesta.headers["location"] == "/docs"
+
+
 @pytest.mark.parametrize("ruta", ["preventa", "postventa", "generica"])
 def test_chat_devuelve_ruta_motivo_y_respuesta(
     monkeypatch: pytest.MonkeyPatch, ruta: str
