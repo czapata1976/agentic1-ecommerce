@@ -14,6 +14,12 @@ from src.config import ajustes
 cliente = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _api_key_vacia(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Por defecto las pruebas corren sin API_KEY: protección desactivada."""
+    monkeypatch.setattr(api_mod.ajustes, "api_key", "")
+
+
 class _GrafoFalso:
     """Sustituye al grafo compilado para capturar la entrada y el thread_id."""
 
@@ -87,6 +93,30 @@ def test_chat_usa_user_id_como_thread_id(monkeypatch: pytest.MonkeyPatch) -> Non
 )
 def test_chat_body_invalido_422(cuerpo: dict[str, Any]) -> None:
     assert cliente.post("/chat", json=cuerpo).status_code == 422
+
+
+def test_chat_exige_api_key_cuando_esta_configurada(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_mod, "grafo_router", _GrafoFalso())
+    monkeypatch.setattr(api_mod.ajustes, "api_key", "clave-de-prueba")
+    cuerpo = {"user_id": "cliente-1", "texto": "hola"}
+
+    assert cliente.post("/chat", json=cuerpo).status_code == 401
+    assert cliente.post(
+        "/chat", json=cuerpo, headers={"X-API-Key": "otra"}
+    ).status_code == 401
+    assert cliente.post(
+        "/chat", json=cuerpo, headers={"X-API-Key": "clave-de-prueba"}
+    ).status_code == 200
+
+
+def test_chat_sin_api_key_configurada_no_pide_cabecera(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_mod, "grafo_router", _GrafoFalso())
+    respuesta = cliente.post("/chat", json={"user_id": "cliente-1", "texto": "hola"})
+    assert respuesta.status_code == 200
 
 
 def test_chat_falla_el_modelo_502(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,6 +266,23 @@ def test_telegram_devuelve_200_si_falla_el_modelo(
     assert "secreta" not in texto
 
 
+def test_telegram_no_usa_la_api_key(
+    monkeypatch: pytest.MonkeyPatch, envio_telegram: list[dict[str, Any]]
+) -> None:
+    """El webhook se autentica con su propio secreto, no con X-API-Key."""
+    monkeypatch.setattr(api_mod, "grafo_router", _GrafoFalso())
+    monkeypatch.setattr(api_mod.ajustes, "api_key", "clave-de-prueba")
+
+    respuesta = cliente.post(
+        "/telegram",
+        headers=CABECERA_TELEGRAM,
+        json={"update_id": 5, "message": {"text": "hola", "chat": {"id": 7}}},
+    )
+
+    assert respuesta.status_code == 200
+    assert len(envio_telegram) == 1
+
+
 def test_openapi_completo() -> None:
     esquema = cliente.get("/openapi.json").json()
 
@@ -245,7 +292,10 @@ def test_openapi_completo() -> None:
     assert {tag["name"] for tag in esquema["tags"]} == {"salud", "chat", "telegram"}
 
     respuestas = esquema["paths"]["/chat"]["post"]["responses"]
-    assert {"200", "422", "502"} <= set(respuestas)
+    assert {"200", "401", "422", "502"} <= set(respuestas)
+
+    esquemas_seguridad = esquema["components"].get("securitySchemes", {})
+    assert any(s.get("name") == "X-API-Key" for s in esquemas_seguridad.values())
 
     esquemas = esquema["components"]["schemas"]
     assert esquemas["ChatRequest"]["example"] == {

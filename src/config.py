@@ -26,6 +26,7 @@ class Ajustes:
         self.telegram_token: str = _texto("TELEGRAM_TOKEN")
         self.telegram_secret: str = _texto("TELEGRAM_SECRET", "cambiame")
         self.public_url: str = _texto("PUBLIC_URL").rstrip("/")
+        self.api_key: str = _texto("API_KEY")
 
     def exigir_api_key(self) -> str:
         """Devuelve la clave de Google o falla con un mensaje accionable."""

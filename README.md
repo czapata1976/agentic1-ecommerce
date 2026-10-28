@@ -56,6 +56,7 @@ sube al repositorio** (está en `.gitignore`).
 | `TELEGRAM_TOKEN` | Solo Telegram | Token que entrega BotFather. | `123456:ABC...` |
 | `TELEGRAM_SECRET` | Solo Telegram | Secreto que Telegram envía en cada webhook. | `cambiame` en local |
 | `PUBLIC_URL` | Solo Telegram | URL `https://` pública del servicio. | `https://mi-app.herokuapp.com` |
+| `API_KEY` | Recomendada | Protege `/chat`: exige la cabecera `X-API-Key`. Vacía = sin protección. | `una-cadena-larga` |
 
 `PORT` no se define en `.env`: en Heroku lo inyecta la plataforma y `Procfile`
 lo usa con `$PORT`.
@@ -123,6 +124,12 @@ uvicorn api.app:app --reload --port 8000
 | `/health` | GET | `{"ok": true, "modelo": MODELO}` |
 | `/chat` | POST | Body `{"user_id", "texto"}`; usa `user_id` como `thread_id`. |
 | `/telegram` | POST | Webhook de Telegram (oculto del Swagger). |
+
+Si defines `API_KEY` en el entorno, `/chat` pasa a exigir la cabecera
+`X-API-Key`: en Swagger pulsa **Authorize** y pégala una vez; en Bruno tendrás
+que añadir la cabecera a mano. `/telegram` no la usa, se autentica con
+`X-Telegram-Bot-Api-Secret-Token`. Con `API_KEY` vacía no se pide nada (modo
+local y pruebas).
 
 Swagger con ejemplos listos para "Try it out":
 <http://localhost:8000/docs>

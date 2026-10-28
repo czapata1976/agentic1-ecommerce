@@ -12,8 +12,17 @@ import secrets
 from typing import Any, Literal
 
 import httpx
-from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException
+from fastapi import (
+    BackgroundTasks,
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Security,
+)
 from fastapi.responses import RedirectResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import ajustes
@@ -32,6 +41,25 @@ if not registro.handlers:
     _manejador.setFormatter(logging.Formatter("%(levelname)s:%(name)s: %(message)s"))
     registro.addHandler(_manejador)
 registro.propagate = False
+
+# --- Seguridad de /chat ---------------------------------------------------
+# Si API_KEY tiene valor, /chat exige la cabecera X-API-Key. Si está vacía, la
+# protección se desactiva (útil para pruebas locales).
+# /telegram NO usa esta clave: se autentica con X-Telegram-Bot-Api-Secret-Token.
+esquema_api_key = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=False,
+    description="Clave definida en la variable API_KEY. Si está vacía, /chat no la pide.",
+)
+
+
+def verificar_api_key(clave: str | None = Security(esquema_api_key)) -> None:
+    """Exige una API key válida cuando la variable API_KEY no está vacía."""
+    if not ajustes.api_key:
+        return
+    if not clave or not secrets.compare_digest(clave, ajustes.api_key):
+        registro.warning("Petición rechazada: API key ausente o incorrecta.")
+        raise HTTPException(status_code=401, detail="API key ausente o incorrecta.")
 
 DESCRIPCION = """
 API HTTP del **router** de un ecommerce, construido con LangGraph.
@@ -240,10 +268,17 @@ def health() -> HealthResponse:
     summary="Enruta un mensaje de cliente",
     description=(
         "Invoca el grafo `router` con `user_id` como `thread_id` y devuelve la ruta "
-        "elegida, el motivo y la respuesta del agente destino."
+        "elegida, el motivo y la respuesta del agente destino. Si `API_KEY` está "
+        "definida, exige la cabecera `X-API-Key`."
     ),
+    dependencies=[Depends(verificar_api_key)],
     responses={
         200: {"description": "El router eligió una ruta y respondió."},
+        401: {
+            "description": (
+                "Falta la cabecera `X-API-Key` o no coincide con `API_KEY`."
+            )
+        },
         422: {
             "description": (
                 "Body inválido: falta `user_id` o `texto`, o alguno viene vacío."
